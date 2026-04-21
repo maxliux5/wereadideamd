@@ -327,6 +327,60 @@ const WeReadAPI = {
     }
   },
 
+  // 获取热门评论
+  async getBestReviews(cookie, bookId, count = 20) {
+    try {
+      await this.visitWeRead(cookie);
+
+      const params = new URLSearchParams({
+        bookId: bookId,
+        synckey: '0',
+        maxIdx: '0',
+        count: String(count)
+      });
+
+      const response = await fetch(`${API.REVIEW_LIST}/best?${params}`, {
+        method: 'GET',
+        headers: { 'Cookie': cookie }
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        const errcode = data.errcode || 0;
+        if (errcode === -2012 || errcode === -2010) {
+          console.error('微信读书Cookie过期了');
+        }
+        throw new Error(`获取热门评论失败: ${JSON.stringify(data)}`);
+      }
+
+      const data = await response.json();
+      const reviews = data.reviews || [];
+
+      if (!reviews || !reviews.length) return [];
+
+      return reviews.map(item => {
+        const r = item.review;
+        if (!r) return null;
+        return {
+          bookId,
+          reviewId: r.reviewId,
+          userVid: r.userVid,
+          userName: r.author?.name || r.author?.nick || '匿名',
+          userAvatar: r.author?.avatar || '',
+          content: r.content || r.htmlContent || '',
+          chapterTitle: r.chapterTitle || r.chapterName || '',
+          createTime: r.createTime,
+          likesCount: item.likesCount || 0,
+          commentsCount: item.commentsCount || 0,
+          star: r.star || 0
+        };
+      }).filter(Boolean);
+    } catch (err) {
+      console.error('获取热门评论失败:', err);
+      return [];
+    }
+  },
+
   // 获取笔记列表
   async getReviews(cookie, bookId) {
     try {
@@ -357,33 +411,35 @@ const WeReadAPI = {
 
       if (!reviews || !reviews.length) return [];
 
-      return reviews.map(r => r.review)
-        .map(r => {
+      return reviews.map(item => {
+          const r = item.review;
           // 处理不同类型的笔记
+          let processed = { ...r };
           if (r.type === 4) {
-            return { chapterUid: 1000000, ...r };
+            processed = { chapterUid: 1000000, ...r };
           }
           if (r.refMpInfo) {
-            return {
+            processed = {
               refMpReviewId: r.refMpInfo.reviewId,
               refMpReviewTitle: r.refMpInfo.title,
               createTime: r.refMpInfo.createTime,
               ...r
             };
           }
-          return r;
-        })
-        .map(r => ({
-          bookId,
-          chapterUid: r.chapterUid,
-          chapterTitle: r.chapterTitle,
-          createTime: r.createTime,
-          markText: r.abstract || '',
-          content: r.content || '',
-          noteId: r.reviewId,
-          refMpReviewId: r.refMpReviewId,
-          refMpReviewTitle: r.refMpReviewTitle
-        }));
+          return {
+            bookId,
+            chapterUid: processed.chapterUid,
+            chapterTitle: processed.chapterTitle,
+            createTime: processed.createTime,
+            markText: processed.abstract || '',
+            content: processed.content || '',
+            noteId: processed.reviewId,
+            refMpReviewId: processed.refMpReviewId,
+            refMpReviewTitle: processed.refMpReviewTitle,
+            likesCount: item.likesCount || 0,
+            commentsCount: item.commentsCount || 0
+          };
+        });
     } catch (err) {
       console.error('获取笔记列表失败:', err);
       return [];
@@ -491,7 +547,14 @@ const MarkdownExporter = {
         if (note.content) {
           md += `${note.content}\n\n`;
         }
-        md += `*${this.formatTime(note.createTime)}*\n\n`;
+        md += `*${this.formatTime(note.createTime)}*`;
+        if (note.likesCount > 0) {
+          md += ` | ❤️ ${note.likesCount}`;
+        }
+        if (note.commentsCount > 0) {
+          md += ` | 💬 ${note.commentsCount}`;
+        }
+        md += `\n\n`;
         md += `---\n\n`;
       });
     }
@@ -503,6 +566,53 @@ const MarkdownExporter = {
     return booksData
       .map(({ book, notes, bookmarks }) => this.formatBook(book, notes, bookmarks))
       .join('\n\n---\n\n');
+  },
+
+  // 格式化热门评论
+  formatBestReviews(book, reviews) {
+    let md = `# 《${book.title}》热门评论\n\n`;
+    md += `> 作者：${book.author || '未知'}\n\n`;
+    md += `---\n\n`;
+
+    if (!reviews || reviews.length === 0) {
+      md += `_暂无热门评论_\n`;
+      return md;
+    }
+
+    reviews.forEach((review, index) => {
+      md += `## ${index + 1}. ${review.userName}\n\n`;
+      if (review.chapterTitle) {
+        md += `### 章节：${review.chapterTitle}\n\n`;
+      }
+      md += `${review.content}\n\n`;
+      md += `*${this.formatTime(review.createTime)}*`;
+      if (review.likesCount > 0) {
+        md += ` | ❤️ ${review.likesCount}`;
+      }
+      if (review.commentsCount > 0) {
+        md += ` | 💬 ${review.commentsCount}`;
+      }
+      md += `\n\n`;
+      md += `---\n\n`;
+    });
+
+    return md;
+  },
+
+  formatAllBooksWithBestReviews(booksData) {
+    const parts = [];
+    for (const { book, notes, bookmarks, bestReviews } of booksData) {
+      let md = '';
+      // 先输出书籍笔记
+      md += this.formatBook(book, notes, bookmarks);
+      // 如果有热门评论，追加
+      if (bestReviews && bestReviews.length > 0) {
+        md += '\n\n---\n\n';
+        md += this.formatBestReviews(book, bestReviews);
+      }
+      parts.push(md);
+    }
+    return parts.join('\n\n---\n\n');
   }
 };
 
@@ -560,7 +670,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const { offset = 0, limit = 50, sortBy = 'title', sortOrder = 'asc', search = '' } = message;
           const result = await WeReadAPI.getBookshelfPaged(cookie, { offset, limit, sortBy, sortOrder, search });
           sendResponse({ success: true, ...result });
-          break;
+          return;
         }
 
         case 'exportBook': {
@@ -588,7 +698,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             notesCount: notes.length,
             bookmarksCount: bookmarks.length
           });
-          break;
+          return;
         }
 
         case 'exportAll': {
@@ -626,7 +736,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
           const markdown = MarkdownExporter.formatAllBooks(results);
           sendResponse({ success: true, markdown, books: results });
-          break;
+          return;
         }
 
         case 'exportSelected': {
@@ -635,7 +745,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             return;
           }
           const { bookIds, exportOptions } = message;
-          const { includeNotes = true, includeBookmarks = true } = exportOptions || {};
+          const { includeNotes = true, includeBookmarks = true, includeBestReviews = false } = exportOptions || {};
           if (!bookIds || bookIds.length === 0) {
             sendResponse({ success: true, markdown: '', books: [], message: '未选择书籍' });
             return;
@@ -653,35 +763,39 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           };
           await saveExportState();
 
-          // 在后台处理导出
-          for (let i = 0; i < bookIds.length; i++) {
-            const bookId = bookIds[i];
-            await delay(150);
-            try {
-              const book = await WeReadAPI.getBookInfo(cookie, bookId);
-              if (!book) continue;
-              const [notes, bookmarks] = await Promise.all([
-                includeNotes ? WeReadAPI.getReviews(cookie, bookId) : Promise.resolve([]),
-                includeBookmarks ? WeReadAPI.getBookmarks(cookie, bookId) : Promise.resolve([])
-              ]);
-              exportState.results.push({ book, notes, bookmarks });
-              exportState.bookTitle = book.title;
-            } catch (e) {
-              console.error(`导出书籍 ${bookId} 失败:`, e);
-            }
-            exportState.current = i + 1;
+          // 并发处理导出，每次最多5本
+          const CONCURRENCY = 5;
+          for (let i = 0; i < bookIds.length; i += CONCURRENCY) {
+            const batch = bookIds.slice(i, i + CONCURRENCY);
+            await Promise.all(batch.map(async (bookId) => {
+              try {
+                const book = await WeReadAPI.getBookInfo(cookie, bookId);
+                if (!book) return;
+                const [notes, bookmarks, bestReviews] = await Promise.all([
+                  includeNotes ? WeReadAPI.getReviews(cookie, bookId) : Promise.resolve([]),
+                  includeBookmarks ? WeReadAPI.getBookmarks(cookie, bookId) : Promise.resolve([]),
+                  includeBestReviews ? WeReadAPI.getBestReviews(cookie, bookId) : Promise.resolve([])
+                ]);
+                exportState.results.push({ book, notes, bookmarks, bestReviews });
+                exportState.bookTitle = book.title;
+              } catch (e) {
+                console.error(`导出书籍 ${bookId} 失败:`, e);
+              }
+            }));
+
+            exportState.current = Math.min(i + CONCURRENCY, bookIds.length);
             await saveExportState();
 
-            // 发送进度更新
+            // 发送进度更新（忽略失败，如 popup 已关闭）
             chrome.runtime.sendMessage({
               action: 'exportProgress',
               current: exportState.current,
               total: exportState.total,
               bookTitle: exportState.bookTitle
-            });
+            }).catch(() => {});
           }
 
-          exportState.markdown = MarkdownExporter.formatAllBooks(exportState.results);
+          exportState.markdown = MarkdownExporter.formatAllBooksWithBestReviews(exportState.results);
           exportState.isExporting = false;
           await saveExportState();
 
@@ -690,7 +804,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             markdown: exportState.markdown,
             books: exportState.results
           });
-          break;
+          return;
         }
 
         case 'getExportStatus': {
@@ -710,12 +824,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         case 'clearExport': {
           clearExportState();
           sendResponse({ success: true });
-          break;
+          return;
         }
 
         case 'ping':
           sendResponse({ success: true, timestamp: Date.now() });
-          break;
+          return;
 
         default:
           sendResponse({ error: 'Unknown action' });
