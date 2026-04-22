@@ -322,20 +322,34 @@ async function init() {
         const errMsg = (response && response.error) ? response.error : '未知错误';
         if (resultSection) {
           resultSection.style.display = 'block';
-          resultText.innerHTML = `<div style="color: #721c24;">导出失败: ${escapeHtml(errMsg)}</div>`;
+          resultText.innerHTML = `
+            <div style="color: #721c24;">导出中断: ${escapeHtml(errMsg)}</div>
+            <div style="font-size: 11px; margin-top: 8px; color: #666;">可点击下方按钮重试，或刷新页面后重新导出</div>
+          `;
         }
-        setStatus('error', '导出失败', errMsg);
+        setStatus('error', '导出中断', '点击按钮重试');
       }
     } catch (err) {
       if (resultSection) {
         resultSection.style.display = 'block';
-        resultText.innerHTML = `<div style="color: #721c24;">导出失败: ${escapeHtml(err.message)}</div>`;
+        resultText.innerHTML = `
+          <div style="color: #721c24;">导出失败: ${escapeHtml(err.message)}</div>
+          <div style="font-size: 11px; margin-top: 8px; color: #666;">可点击下方按钮重试，或刷新页面后重新导出</div>
+        `;
       }
-      setStatus('error', '导出失败', err.message);
+      setStatus('error', '导出失败', '点击按钮重试');
     }
 
     if (exportAllBtn) exportAllBtn.disabled = false;
     if (exportSelectedBtn) exportSelectedBtn.disabled = false;
+  }
+
+  // 刷新并重试当前导出选项
+  function retryExport() {
+    if (progress) progress.style.display = 'none';
+    if (resultSection) resultSection.style.display = 'none';
+    currentMarkdown = '';
+    currentBooksData = [];
   }
 
   // 导出全部按钮

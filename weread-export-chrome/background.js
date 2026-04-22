@@ -543,7 +543,9 @@ const MarkdownExporter = {
 
       notes.forEach(note => {
         md += `### 笔记\n`;
-        md += `${note.markText || ''}\n\n`;
+        if (note.markText) {
+          md += `> ${this.escapeMarkdown(note.markText)}\n\n`;
+        }
         if (note.content) {
           md += `${note.content}\n\n`;
         }
@@ -764,7 +766,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           await saveExportState();
 
           // 并发处理导出，每次最多5本
-          const CONCURRENCY = 5;
+          const CONCURRENCY = 2;
           for (let i = 0; i < bookIds.length; i += CONCURRENCY) {
             const batch = bookIds.slice(i, i + CONCURRENCY);
             await Promise.all(batch.map(async (bookId) => {
